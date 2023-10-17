@@ -1,2 +1,2 @@
 """JIRA Integration component constants."""
-DOMAIN = "hello_service"
+DOMAIN = "jira_service"
