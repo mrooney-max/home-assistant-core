@@ -23,11 +23,15 @@ def setup(hass, config):
         api_token = config[DOMAIN].get("api_token")
         baseurl = config[DOMAIN].get("jira_base_url")
         data = get_data_from_api(username, api_token, baseurl)
-
+        message = ""
+        for issue in data["issues"]:
+            message += issue["key"] +" - " + issue["fields"]["summary"] + "\n"
+        message = message.rstrip()
         if data:
             # Process the API response data here
             # Example: set a state or perform other actions based on the data
             _LOGGER.info("Received data from API: %s", data)
+            _LOGGER.info("Identified Jiras: \n%s", message)
             # hass.states.set("hello_service.hello", json.dumps(data))
             # await hass.states.async_set(
             #     "hello_service.hello", "on", {"my_attribute": json.dumps(data)}
@@ -35,7 +39,7 @@ def setup(hass, config):
 
         else:
             # Handle API request failure
-            _LOGGER.error("Failed to retrieve data from API.")
+            _LOGGER.error("Failed to retrieve data from API")
 
     hass.services.register(DOMAIN, "hello", handle_hello)
 
