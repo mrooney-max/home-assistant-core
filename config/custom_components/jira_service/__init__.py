@@ -22,7 +22,7 @@ async def async_setup(hass, config):
         username = config[DOMAIN].get("username")
         api_token = config[DOMAIN].get("api_token")
         baseurl = config[DOMAIN].get("jira_base_url")
-        data = await get_data_from_api(hass, username, api_token, baseurl)
+        data = await get_data_from_api(username, api_token, baseurl)
         message = ""
         for issue in data["issues"]:
             message += issue["key"] + " - " + issue["fields"]["summary"] + "\n"
@@ -34,7 +34,7 @@ async def async_setup(hass, config):
             _LOGGER.info("Received data from API: %s", data)
             _LOGGER.info("Identified Jiras: \n%s", message)
             # hass.states.set("jira_service.jira", json.dumps(data))
-            await hass.states.async_set("jira_service.jira", "on", {"message": message})
+            hass.states.async_set("jira_service.jira", "on", {"Summary": message})
 
         else:
             # Handle API request failure
@@ -46,7 +46,7 @@ async def async_setup(hass, config):
     return True
 
 
-async def get_data_from_api(hass, username, api_token, baseurl):
+async def get_data_from_api(username, api_token, baseurl):
     """Make a GET request to the API with Basic Authentication."""
 
     try:
