@@ -1,0 +1,27 @@
+{
+  "config": {
+    "abort": {
+      "already_configured": "Service is already configured"
+    },
+    "error": {
+      "cannot_connect": "Failed to connect",
+      "invalid_auth": "Invalid authentication",
+      "unknown": "Unexpected error"
+    },
+    "step": {
+      "user": {
+        "data": {
+          "api_key": "API Key",
+          "host": "Host",
+          "username": "Username"
+        },
+        "data_description": {
+          "api_key": "The JIRA API token.",
+          "host": "The host of your JIRA instance.",
+          "username": "Your JIRA email."
+        },
+        "description": "Refer to the documentation to get your api key."
+      }
+    }
+  }
+}

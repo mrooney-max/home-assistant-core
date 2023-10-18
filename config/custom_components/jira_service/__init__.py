@@ -7,7 +7,7 @@ from homeassistant.const import CONF_API_KEY, CONF_HOST, CONF_USERNAME, Platform
 from homeassistant.exceptions import ConfigEntryNotReady
 from homeassistant.helpers import discovery
 
-from .const import DATA_CLIENT, DOMAIN, JIRA_DATA
+from .const import DATA_CLIENT, DATA_HASS_CONFIG, DOMAIN, JIRA_DATA
 from .WebClient import WebClient
 
 _LOGGER = logging.getLogger(__name__)
@@ -61,6 +61,7 @@ async def async_setup(hass, config):
             _LOGGER.error("Failed to retrieve data from API")
 
     hass.services.async_register(DOMAIN, "jira", handle_jira)
+    hass.data[DATA_HASS_CONFIG] = config
 
     # Return boolean to indicate that initialization was successful.
     return True
@@ -89,7 +90,7 @@ async def async_setup_entry(hass, entry):
             Platform.NOTIFY,
             DOMAIN,
             hass.data[DOMAIN][entry.entry_id],
-            # hass.data[DATA_HASS_CONFIG],
+            hass.data[DATA_HASS_CONFIG],
         )
     )
 

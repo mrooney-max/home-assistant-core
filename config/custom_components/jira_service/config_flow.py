@@ -18,8 +18,8 @@ _LOGGER = logging.getLogger(__name__)
 CONFIG_SCHEMA = vol.Schema(
     {
         vol.Required(CONF_API_KEY): str,
-        vol.Optional(CONF_HOST): str,
-        vol.Optional(CONF_USERNAME): str,
+        vol.Required(CONF_HOST): str,
+        vol.Required(CONF_USERNAME): str,
     }
 )
 
@@ -40,6 +40,7 @@ class JiraFlowHandler(config_entries.ConfigFlow, domain=DOMAIN):
             elif success is True:
                 await self.async_set_unique_id(user_input[CONF_USERNAME].lower())
                 self._abort_if_unique_id_configured()
+
                 return self.async_create_entry(
                     title=user_input.get(CONF_USERNAME)
                     + " : "

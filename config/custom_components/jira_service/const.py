@@ -2,3 +2,4 @@
 DOMAIN = "jira_service"
 DATA_CLIENT = "client"
 JIRA_DATA = "data"
+DATA_HASS_CONFIG = "jira_hass_config"
