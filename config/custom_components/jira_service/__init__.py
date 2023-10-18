@@ -31,11 +31,35 @@ async def async_setup(hass, config):
         account_ids = config[DOMAIN].get("jira_account_ids")
         comment_length = config[DOMAIN].get("comment_length", 80)
 
+        webClient = WebClient(
+            api_key=api_token,
+            base_url=baseurl,
+            username=username,
+        )
+
         process_current_user_only = account_ids is None or len(account_ids) == 0
 
         data = await get_jira_tickets(username, api_token, baseurl, account_ids)
+        if process_current_user_only:
+            sorted_issues = data["issues"]
+        else:
+            sorted_issues = sorted_issues = sorted(
+                data["issues"], key=lambda x: x["original_account_id"]
+            )
+
         message = ""
-        for issue in data["issues"]:
+        current_account_id = ""
+        for issue in sorted_issues:
+            if (
+                not process_current_user_only
+                and current_account_id != issue["original_account_id"]
+            ):
+                if current_account_id != "":
+                    message += "\n"
+                current_account_id = issue["original_account_id"]
+                user_data = await webClient.get_user(current_account_id)
+                message += f"*{user_data['displayName']}'s tickets:*\n"
+
             message += (
                 f"*<{baseurl}/browse/{issue['key']}|{issue['key']}>*"
                 + f" - Status: *{issue['fields']['status']['name']}* - {issue['fields']['summary']}\n"
@@ -45,7 +69,11 @@ async def async_setup(hass, config):
             )
 
             message += format_ticket_details(
-                ticket_details, comment_length, process_current_user_only, username
+                ticket_details,
+                comment_length,
+                process_current_user_only,
+                username,
+                current_account_id,
             )
 
         message = sanitize_message(message)
@@ -108,13 +136,16 @@ async def async_setup_entry(hass, entry):
 
 
 def format_ticket_details(
-    ticket_details, comment_length, process_current_user_only, username
+    ticket_details, comment_length, process_current_user_only, username, account_id
 ):
     """Format the Jira JSON into readable text."""
     latest_status_change_date = ticket_details["fields"]["statuscategorychangedate"]
     if process_current_user_only:
         latest_comment = get_latest_comment_from_current_user(ticket_details, username)
     else:
+        latest_comment = get_latest_comment_from_current_account_id(
+            ticket_details, account_id
+        )
         latest_comment = ticket_details["fields"]["comment"]["comments"][-1]
     if latest_comment is None:
         return "N/A\n"
@@ -139,6 +170,23 @@ def get_latest_comment_from_current_user(ticket_details, username):
         created_timestamp = comment["created"]
 
         if author_email == username:
+            if latest_timestamp is None or created_timestamp > latest_timestamp:
+                latest_comment = comment
+                latest_timestamp = created_timestamp
+
+    return latest_comment
+
+
+def get_latest_comment_from_current_account_id(ticket_details, account_id):
+    """Get the latest comment for the current user. We don't care about comments from other users."""
+    latest_comment = None
+    latest_timestamp = None
+
+    for comment in ticket_details["fields"]["comment"]["comments"]:
+        author_account_id = comment["author"]["accountId"]
+        created_timestamp = comment["created"]
+
+        if author_account_id == account_id:
             if latest_timestamp is None or created_timestamp > latest_timestamp:
                 latest_comment = comment
                 latest_timestamp = created_timestamp
@@ -182,6 +230,9 @@ async def get_jira_tickets(username, api_token, baseurl, account_ids):
                     async with session.get(url, auth=auth) as response:
                         if response.status == 200:
                             data = await response.json()
+                            # Let us keep track of what the original account_id this is for so we can use this later
+                            for issue in data.get("issues", []):
+                                issue["original_account_id"] = account_id
                             result["issues"].extend(data.get("issues", []))
                         else:
                             _LOGGER.error(

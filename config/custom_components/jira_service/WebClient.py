@@ -83,3 +83,41 @@ class WebClient:
             # Handle exceptions raised during the API request
             _LOGGER.error("Error while making API request: %s", str(e))
             return False
+
+    async def get_user(self, account_id):
+        """Retrieve user information based on the provided account ID.
+
+        Args:
+            account_id (str): The unique account ID of the user to retrieve.
+
+        Returns:
+            dict: A dictionary containing user information, including name and other details.
+
+        Raises:
+            Exception: If the API request fails, an exception is raised with an error message.
+
+        This function makes an authenticated API request to retrieve user information from
+        the JIRA server based on the provided account ID.
+
+        Example:
+            user_data = await get_user('account_id123')
+            print(user_data)  # {'name': 'John Doe', 'email': 'john@example.com', ...}
+        """
+        try:
+            async with aiohttp.ClientSession() as session:
+                url = f"{self.base_url}/rest/api/2/user?accountId={account_id}"
+
+                auth = aiohttp.BasicAuth(self.username, self.api_key)
+
+                async with session.get(url, auth=auth) as response:
+                    if response.status == 200:
+                        data = await response.json()
+                        return data
+                    else:
+                        _LOGGER.error(
+                            "Failed to retrieve data from API. Status code: %s",
+                            response.status,
+                        )
+                        raise Exception("Failed to retrieve User data")
+        except Exception as e:
+            _LOGGER.error("Error while making API request: %s", str(e))
