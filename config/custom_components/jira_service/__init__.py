@@ -25,39 +25,38 @@ async def async_setup(hass, config):
         """Handle the service call."""
         call.data.get(ATTR_NAME, DEFAULT_NAME)
 
-        # Make the API request with Basic Authentication
         username = config[DOMAIN].get("username")
         api_token = config[DOMAIN].get("api_token")
         baseurl = config[DOMAIN].get("jira_base_url")
-        data = await get_jira_tickets(username, api_token, baseurl)
+        account_ids = config[DOMAIN].get("jira_account_ids")
+        comment_length = config[DOMAIN].get("comment_length", 80)
+
+        process_current_user_only = account_ids is None or len(account_ids) == 0
+
+        data = await get_jira_tickets(username, api_token, baseurl, account_ids)
         message = ""
         for issue in data["issues"]:
             message += (
-                issue["key"]
-                + " - Status: "
-                + issue["fields"]["status"]["name"]
-                + " - "
-                + issue["fields"]["summary"]
-                + "\n"
+                f"*<{baseurl}/browse/{issue['key']}|{issue['key']}>*"
+                + f" - Status: *{issue['fields']['status']['name']}* - {issue['fields']['summary']}\n"
             )
             ticket_details = await get_jira_ticket_details(
                 username, api_token, baseurl, issue["key"]
             )
-            message += format_ticket_details(ticket_details)
 
+            message += format_ticket_details(
+                ticket_details, comment_length, process_current_user_only, username
+            )
+
+        message = sanitize_message(message)
         message = message.rstrip() + "\n"
 
         if data:
-            # Process the API response data here
-            # Example: set a state or perform other actions based on the data
-            # _LOGGER.info("Received data from API: %s", data)
             _LOGGER.info("Identified Jiras: \n%s\n\n", message)
 
-            # hass.states.set("jira_service.jira", json.dumps(data))
             hass.states.async_set("jira_service.jira", "on", {"Summary": message})
 
         else:
-            # Handle API request failure
             _LOGGER.error("Failed to retrieve data from API")
 
     hass.services.async_register(DOMAIN, "jira", handle_jira)
@@ -65,6 +64,13 @@ async def async_setup(hass, config):
 
     # Return boolean to indicate that initialization was successful.
     return True
+
+
+def sanitize_message(message):
+    """Sanitize the message so that it can be pasted to Slack without any problems."""
+    message = message.replace("{", "[")
+    message = message.replace("}", "]")
+    return message
 
 
 async def async_setup_entry(hass, entry):
@@ -101,19 +107,44 @@ async def async_setup_entry(hass, entry):
     return True
 
 
-def format_ticket_details(ticket_details):
+def format_ticket_details(
+    ticket_details, comment_length, process_current_user_only, username
+):
     """Format the Jira JSON into readable text."""
     latest_status_change_date = ticket_details["fields"]["statuscategorychangedate"]
-    latest_comment = ticket_details["fields"]["comment"]["comments"][-1]
+    if process_current_user_only:
+        latest_comment = get_latest_comment_from_current_user(ticket_details, username)
+    else:
+        latest_comment = ticket_details["fields"]["comment"]["comments"][-1]
+    if latest_comment is None:
+        return "N/A\n"
     latest_comment_text = latest_comment["body"]
     latest_comment_author = latest_comment["author"]["displayName"]
     latest_comment_date = latest_comment["updated"]
     formatted_ticket_details = (
         f"Status last changed: {format_date(latest_status_change_date)}\n"
         f"Latest comment by {latest_comment_author} on {format_date(latest_comment_date)}\n"
-        f"Text: {latest_comment_text[:80].strip()}\n\n"
+        f"Text: {latest_comment_text[:comment_length].strip()}\n\n"
     )
     return formatted_ticket_details
+
+
+def get_latest_comment_from_current_user(ticket_details, username):
+    """Get the latest comment for the current user. We don't care about comments from other users."""
+    latest_comment = None
+    latest_timestamp = None
+
+    for comment in ticket_details["fields"]["comment"]["comments"]:
+        author_email = comment["author"]["emailAddress"]
+        created_timestamp = comment["created"]
+
+        if author_email == username:
+            if latest_timestamp is None or created_timestamp > latest_timestamp:
+                latest_comment = comment
+                latest_timestamp = created_timestamp
+
+    return latest_comment
+
 
 def format_date(date):
     """Format the datetime into MM/DD/YYYY HH:MM format."""
@@ -122,7 +153,7 @@ def format_date(date):
     if hour >= 12:
         ampm = "PM"
     if hour > 12:
-        hour-= 12
+        hour -= 12
     elif hour < 1:
         hour = 12
     minute = date[14:16]
@@ -130,29 +161,58 @@ def format_date(date):
     formatted_date = f"{date[5:7]}/{date[8:10]}/{date[0:4]} {hour}:{minute} {ampm}"
     return formatted_date
 
-async def get_jira_tickets(username, api_token, baseurl):
+
+async def get_jira_tickets(username, api_token, baseurl, account_ids):
     """Make a GET request to the API with Basic Authentication."""
 
-    try:
-        async with aiohttp.ClientSession() as session:
-            url = (
-                baseurl
-                + "/rest/api/2/search?jql=assignee was currentuser() AND updated >= -2d&ORDER BY updated DESC"
-            )
-            auth = aiohttp.BasicAuth(username, api_token)
-            async with session.get(url, auth=auth) as response:
-                if response.status == 200:
-                    data = await response.json()
-                    return data
-                else:
-                    _LOGGER.error(
-                        "Failed to retrieve data from API. Status code: %s",
-                        response.status,
+    daysToLookBack = 2
+
+    if account_ids is not None and account_ids.strip() != "":
+        account_id_list = [account_id.strip() for account_id in account_ids.split(",")]
+        result = {"issues": []}
+
+        for account_id in account_id_list:
+            try:
+                async with aiohttp.ClientSession() as session:
+                    url = (
+                        baseurl
+                        + f"/rest/api/2/search?jql=assignee was {account_id} AND updated >= -{daysToLookBack}d&ORDER BY updated DESC"
                     )
-                    return None
-    except Exception as e:
-        _LOGGER.error("Error while making API request: %s", str(e))
-        return None
+                    auth = aiohttp.BasicAuth(username, api_token)
+                    async with session.get(url, auth=auth) as response:
+                        if response.status == 200:
+                            data = await response.json()
+                            result["issues"].extend(data.get("issues", []))
+                        else:
+                            _LOGGER.error(
+                                "Failed to retrieve data from API. Status code: %s",
+                                response.status,
+                            )
+            except Exception as e:
+                _LOGGER.error("Error while making API request: %s", str(e))
+
+        return result
+    else:
+        try:
+            async with aiohttp.ClientSession() as session:
+                url = (
+                    baseurl
+                    + f"/rest/api/2/search?jql=assignee was currentuser() AND updated >= -{daysToLookBack}d&ORDER BY updated DESC"
+                )
+                auth = aiohttp.BasicAuth(username, api_token)
+                async with session.get(url, auth=auth) as response:
+                    if response.status == 200:
+                        data = await response.json()
+                        return data
+                    else:
+                        _LOGGER.error(
+                            "Failed to retrieve data from API. Status code: %s",
+                            response.status,
+                        )
+                        return None
+        except Exception as e:
+            _LOGGER.error("Error while making API request: %s", str(e))
+            return None
 
 
 async def get_jira_ticket_details(username, api_token, baseurl, ticket_key):
