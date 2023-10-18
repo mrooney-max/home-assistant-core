@@ -3,9 +3,16 @@ import logging
 
 import aiohttp
 
+from homeassistant.const import CONF_API_KEY, CONF_HOST, CONF_USERNAME, Platform
+from homeassistant.exceptions import ConfigEntryNotReady
+from homeassistant.helpers import discovery
+
+from .const import DATA_CLIENT, DOMAIN, JIRA_DATA
+from .WebClient import WebClient
+
 _LOGGER = logging.getLogger(__name__)
 
-DOMAIN = "jira_service"
+PLATFORMS = [Platform.NOTIFY, Platform.SENSOR]
 
 ATTR_NAME = "name"
 DEFAULT_NAME = "World"
@@ -25,8 +32,17 @@ async def async_setup(hass, config):
         data = await get_jira_tickets(username, api_token, baseurl)
         message = ""
         for issue in data["issues"]:
-            message += issue["key"] + " - Status: " + issue["fields"]["status"]["name"] + " - " + issue["fields"]["summary"] + "\n"
-            ticket_details = await get_jira_ticket_details(username, api_token, baseurl, issue["key"])
+            message += (
+                issue["key"]
+                + " - Status: "
+                + issue["fields"]["status"]["name"]
+                + " - "
+                + issue["fields"]["summary"]
+                + "\n"
+            )
+            ticket_details = await get_jira_ticket_details(
+                username, api_token, baseurl, issue["key"]
+            )
             message += format_ticket_details(ticket_details)
 
         message = message.rstrip() + "\n"
@@ -49,6 +65,41 @@ async def async_setup(hass, config):
     # Return boolean to indicate that initialization was successful.
     return True
 
+
+async def async_setup_entry(hass, entry):
+    """Set up a config entry for Jira Service."""
+    webClient = WebClient(
+        api_key=entry.data[CONF_API_KEY],
+        base_url=entry.data[CONF_HOST],
+        username=entry.data[CONF_USERNAME],
+    )
+
+    try:
+        await webClient.verify_connection()
+    except Exception as ex:
+        raise ConfigEntryNotReady("Error while setting up integration") from ex
+    data = {
+        DATA_CLIENT: webClient,
+    }
+    hass.data.setdefault(DOMAIN, {})[entry.entry_id] = entry.data | {JIRA_DATA: data}
+
+    hass.async_create_task(
+        discovery.async_load_platform(
+            hass,
+            Platform.NOTIFY,
+            DOMAIN,
+            hass.data[DOMAIN][entry.entry_id],
+            # hass.data[DATA_HASS_CONFIG],
+        )
+    )
+
+    await hass.config_entries.async_forward_entry_setups(
+        entry, [platform for platform in PLATFORMS if platform != Platform.NOTIFY]
+    )
+
+    return True
+
+
 def format_ticket_details(ticket_details):
     """Format the Jira JSON into readable text."""
     latest_status_change_date = ticket_details["fields"]["statuscategorychangedate"]
@@ -56,10 +107,13 @@ def format_ticket_details(ticket_details):
     latest_comment_text = latest_comment["body"]
     latest_comment_author = latest_comment["author"]["displayName"]
     latest_comment_date = latest_comment["updated"]
-    formatted_ticket_details = f"Status last changed: {latest_status_change_date}\n" \
-        f"Latest comment by {latest_comment_author} on {latest_comment_date}\n" \
+    formatted_ticket_details = (
+        f"Status last changed: {latest_status_change_date}\n"
+        f"Latest comment by {latest_comment_author} on {latest_comment_date}\n"
         f"Text: {latest_comment_text[:80].strip()}\n\n"
+    )
     return formatted_ticket_details
+
 
 async def get_jira_tickets(username, api_token, baseurl):
     """Make a GET request to the API with Basic Authentication."""
@@ -68,7 +122,7 @@ async def get_jira_tickets(username, api_token, baseurl):
         async with aiohttp.ClientSession() as session:
             url = (
                 baseurl
-                + "search?jql=assignee was currentuser() AND updated >= -2d&ORDER BY updated DESC"
+                + "/rest/api/2/search?jql=assignee was currentuser() AND updated >= -2d&ORDER BY updated DESC"
             )
             auth = aiohttp.BasicAuth(username, api_token)
             async with session.get(url, auth=auth) as response:
@@ -85,12 +139,13 @@ async def get_jira_tickets(username, api_token, baseurl):
         _LOGGER.error("Error while making API request: %s", str(e))
         return None
 
+
 async def get_jira_ticket_details(username, api_token, baseurl, ticket_key):
     """Make a GET request to the API with Basic Authentication."""
 
     try:
         async with aiohttp.ClientSession() as session:
-            url = baseurl + "issue/" + ticket_key
+            url = baseurl + "/rest/api/2/issue/" + ticket_key
             auth = aiohttp.BasicAuth(username, api_token)
             async with session.get(url, auth=auth) as response:
                 if response.status == 200:
@@ -105,3 +160,24 @@ async def get_jira_ticket_details(username, api_token, baseurl, ticket_key):
     except Exception as e:
         _LOGGER.error("Error while making API request: %s", str(e))
         return None
+
+
+async def verify_connection(username, api_token, baseurl):
+    """Make a GET request to the API with Basic Authentication."""
+
+    try:
+        async with aiohttp.ClientSession() as session:
+            url = baseurl + "/rest/api/2/mypreferences/locale"
+            auth = aiohttp.BasicAuth(username, api_token)
+            async with session.get(url, auth=auth) as response:
+                if response.status == 200:
+                    return True
+                else:
+                    _LOGGER.error(
+                        "Failed to retrieve data from API. Status code: %s",
+                        response.status,
+                    )
+                    return False
+    except Exception as e:
+        _LOGGER.error("Error while making API request: %s", str(e))
+        return False
