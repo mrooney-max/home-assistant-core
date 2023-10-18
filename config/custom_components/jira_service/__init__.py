@@ -109,12 +109,26 @@ def format_ticket_details(ticket_details):
     latest_comment_author = latest_comment["author"]["displayName"]
     latest_comment_date = latest_comment["updated"]
     formatted_ticket_details = (
-        f"Status last changed: {latest_status_change_date}\n"
-        f"Latest comment by {latest_comment_author} on {latest_comment_date}\n"
+        f"Status last changed: {format_date(latest_status_change_date)}\n"
+        f"Latest comment by {latest_comment_author} on {format_date(latest_comment_date)}\n"
         f"Text: {latest_comment_text[:80].strip()}\n\n"
     )
     return formatted_ticket_details
 
+def format_date(date):
+    """Format the datetime into MM/DD/YYYY HH:MM format."""
+    hour = int(date[11:13])
+    ampm = "AM"
+    if hour >= 12:
+        ampm = "PM"
+    if hour > 12:
+        hour-= 12
+    elif hour < 1:
+        hour = 12
+    minute = date[14:16]
+
+    formatted_date = f"{date[5:7]}/{date[8:10]}/{date[0:4]} {hour}:{minute} {ampm}"
+    return formatted_date
 
 async def get_jira_tickets(username, api_token, baseurl):
     """Make a GET request to the API with Basic Authentication."""
