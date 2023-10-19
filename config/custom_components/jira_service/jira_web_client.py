@@ -142,8 +142,11 @@ class jira_web_client:
         user_data = await get_bulk_users(account_ids)
         """
         try:
-            account_ids_request = ""
+            unique_account_ids = set()
             for account_id in account_ids:
+                unique_account_ids.add(account_id)
+            account_ids_request = ""
+            for account_id in unique_account_ids:
                 account_ids_request += f"&accountId={account_id}"
 
             async with aiohttp.ClientSession() as session:
