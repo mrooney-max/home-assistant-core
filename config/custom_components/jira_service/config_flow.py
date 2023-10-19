@@ -11,7 +11,7 @@ from homeassistant.data_entry_flow import FlowResult
 from homeassistant.helpers import aiohttp_client
 
 from .const import DOMAIN
-from .WebClient import WebClient
+from .jira_web_client import jira_web_client
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -64,7 +64,7 @@ class JiraFlowHandler(config_entries.ConfigFlow, domain=DOMAIN):
     ) -> tuple[str, None] | tuple[None, dict[str, str]]:
         """Try connecting to JIRA."""
         aiohttp_client.async_get_clientsession(self.hass)
-        client = WebClient(
+        client = jira_web_client(
             api_key=user_input[CONF_API_KEY],
             base_url=user_input[CONF_HOST],
             username=user_input[CONF_USERNAME],

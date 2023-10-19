@@ -1,14 +1,13 @@
 """Support for JIRA Integration custom component."""
 import logging
-
-import aiohttp
+import re
 
 from homeassistant.const import CONF_API_KEY, CONF_HOST, CONF_USERNAME, Platform
 from homeassistant.exceptions import ConfigEntryNotReady
 from homeassistant.helpers import discovery
 
 from .const import DATA_CLIENT, DATA_HASS_CONFIG, DOMAIN, JIRA_DATA
-from .WebClient import WebClient
+from .jira_web_client import jira_web_client
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -27,19 +26,19 @@ async def async_setup(hass, config):
 
         username = config[DOMAIN].get("username")
         api_token = config[DOMAIN].get("api_token")
-        baseurl = config[DOMAIN].get("jira_base_url")
+        base_url = config[DOMAIN].get("jira_base_url")
         account_ids = config[DOMAIN].get("jira_account_ids")
         comment_length = config[DOMAIN].get("comment_length", 80)
 
-        webClient = WebClient(
+        web_client = jira_web_client(
             api_key=api_token,
-            base_url=baseurl,
+            base_url=base_url,
             username=username,
         )
 
         process_current_user_only = account_ids is None or len(account_ids) == 0
 
-        data = await get_jira_tickets(username, api_token, baseurl, account_ids)
+        data = await get_jira_tickets(account_ids, web_client)
         if process_current_user_only:
             sorted_issues = data["issues"]
         else:
@@ -55,18 +54,16 @@ async def async_setup(hass, config):
                 and current_account_id != issue["original_account_id"]
             ):
                 if current_account_id != "":
-                    message += "\n"
+                    message += "--------------------------------------------\n\n"
                 current_account_id = issue["original_account_id"]
-                user_data = await webClient.get_user(current_account_id)
+                user_data = await web_client.get_user(current_account_id)
                 message += f"*{user_data['displayName']}'s tickets:*\n"
 
             message += (
-                f"*<{baseurl}/browse/{issue['key']}|{issue['key']}>*"
+                f"*<{base_url}/browse/{issue['key']}|{issue['key']}>*"
                 + f" - Status: *{issue['fields']['status']['name']}* - {issue['fields']['summary']}\n"
             )
-            ticket_details = await get_jira_ticket_details(
-                username, api_token, baseurl, issue["key"]
-            )
+            ticket_details = await web_client.get_ticket_details(issue["key"])
 
             message += format_ticket_details(
                 ticket_details,
@@ -75,6 +72,8 @@ async def async_setup(hass, config):
                 username,
                 current_account_id,
             )
+
+        message = await convert_comment_account_ids_to_user_names(message, web_client)
 
         message = sanitize_message(message)
         message = message.rstrip() + "\n"
@@ -94,27 +93,20 @@ async def async_setup(hass, config):
     return True
 
 
-def sanitize_message(message):
-    """Sanitize the message so that it can be pasted to Slack without any problems."""
-    message = message.replace("{", "[")
-    message = message.replace("}", "]")
-    return message
-
-
 async def async_setup_entry(hass, entry):
     """Set up a config entry for Jira Service."""
-    webClient = WebClient(
+    web_client = jira_web_client(
         api_key=entry.data[CONF_API_KEY],
         base_url=entry.data[CONF_HOST],
         username=entry.data[CONF_USERNAME],
     )
 
     try:
-        await webClient.verify_connection()
+        await web_client.verify_connection()
     except Exception as ex:
         raise ConfigEntryNotReady("Error while setting up integration") from ex
     data = {
-        DATA_CLIENT: webClient,
+        DATA_CLIENT: web_client,
     }
     hass.data.setdefault(DOMAIN, {})[entry.entry_id] = entry.data | {JIRA_DATA: data}
 
@@ -146,7 +138,6 @@ def format_ticket_details(
         latest_comment = get_latest_comment_from_current_account_id(
             ticket_details, account_id
         )
-        latest_comment = ticket_details["fields"]["comment"]["comments"][-1]
     if latest_comment is None:
         return "N/A\n"
     latest_comment_text = latest_comment["body"]
@@ -210,100 +201,44 @@ def format_date(date):
     return formatted_date
 
 
-async def get_jira_tickets(username, api_token, baseurl, account_ids):
+async def get_jira_tickets(account_ids, web_client):
     """Make a GET request to the API with Basic Authentication."""
 
-    daysToLookBack = 2
+    days_to_look_back = 2
 
     if account_ids is not None and account_ids.strip() != "":
         account_id_list = [account_id.strip() for account_id in account_ids.split(",")]
         result = {"issues": []}
 
         for account_id in account_id_list:
-            try:
-                async with aiohttp.ClientSession() as session:
-                    url = (
-                        baseurl
-                        + f"/rest/api/2/search?jql=assignee was {account_id} AND updated >= -{daysToLookBack}d&ORDER BY updated DESC"
-                    )
-                    auth = aiohttp.BasicAuth(username, api_token)
-                    async with session.get(url, auth=auth) as response:
-                        if response.status == 200:
-                            data = await response.json()
-                            # Let us keep track of what the original account_id this is for so we can use this later
-                            for issue in data.get("issues", []):
-                                issue["original_account_id"] = account_id
-                            result["issues"].extend(data.get("issues", []))
-                        else:
-                            _LOGGER.error(
-                                "Failed to retrieve data from API. Status code: %s",
-                                response.status,
-                            )
-            except Exception as e:
-                _LOGGER.error("Error while making API request: %s", str(e))
-
+            data = await web_client.get_tickets_by_account_id(
+                account_id, days_to_look_back
+            )
+            result["issues"].extend(data)
         return result
     else:
-        try:
-            async with aiohttp.ClientSession() as session:
-                url = (
-                    baseurl
-                    + f"/rest/api/2/search?jql=assignee was currentuser() AND updated >= -{daysToLookBack}d&ORDER BY updated DESC"
-                )
-                auth = aiohttp.BasicAuth(username, api_token)
-                async with session.get(url, auth=auth) as response:
-                    if response.status == 200:
-                        data = await response.json()
-                        return data
-                    else:
-                        _LOGGER.error(
-                            "Failed to retrieve data from API. Status code: %s",
-                            response.status,
-                        )
-                        return None
-        except Exception as e:
-            _LOGGER.error("Error while making API request: %s", str(e))
-            return None
+        data = await web_client.get_tickets_by_current_user(days_to_look_back)
+        return data
 
 
-async def get_jira_ticket_details(username, api_token, baseurl, ticket_key):
-    """Make a GET request to the API with Basic Authentication."""
+async def convert_comment_account_ids_to_user_names(message, web_client):
+    """In the message replace [~accountid:2434432:asdf324-234sdf-4bb6-234asd-234243asfd] with the user's display name."""
+    pattern = r"\[~accountid:([^\]]+)\]"
 
-    try:
-        async with aiohttp.ClientSession() as session:
-            url = baseurl + "/rest/api/2/issue/" + ticket_key
-            auth = aiohttp.BasicAuth(username, api_token)
-            async with session.get(url, auth=auth) as response:
-                if response.status == 200:
-                    data = await response.json()
-                    return data
-                else:
-                    _LOGGER.error(
-                        "Failed to retrieve data from API. Status code: %s",
-                        response.status,
-                    )
-                    return None
-    except Exception as e:
-        _LOGGER.error("Error while making API request: %s", str(e))
-        return None
+    matching_account_ids = re.findall(pattern, message)
+
+    bulk_user_data = await web_client.get_bulk_users(matching_account_ids)
+
+    for user_data in bulk_user_data["values"]:
+        message = message.replace(
+            f"[~accountid:{user_data['accountId']}]", user_data["displayName"]
+        )
+
+    return message
 
 
-async def verify_connection(username, api_token, baseurl):
-    """Make a GET request to the API with Basic Authentication."""
-
-    try:
-        async with aiohttp.ClientSession() as session:
-            url = baseurl + "/rest/api/2/mypreferences/locale"
-            auth = aiohttp.BasicAuth(username, api_token)
-            async with session.get(url, auth=auth) as response:
-                if response.status == 200:
-                    return True
-                else:
-                    _LOGGER.error(
-                        "Failed to retrieve data from API. Status code: %s",
-                        response.status,
-                    )
-                    return False
-    except Exception as e:
-        _LOGGER.error("Error while making API request: %s", str(e))
-        return False
+def sanitize_message(message):
+    """Sanitize the message so that it can be pasted to Slack without any problems."""
+    message = message.replace("{", "[")
+    message = message.replace("}", "]")
+    return message
