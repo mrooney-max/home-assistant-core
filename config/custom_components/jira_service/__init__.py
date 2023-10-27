@@ -157,10 +157,12 @@ def get_latest_comment_from_current_user(ticket_details, username):
     latest_timestamp = None
 
     for comment in ticket_details["fields"]["comment"]["comments"]:
-        author_email = comment["author"]["emailAddress"]
+        author = comment["author"]
         created_timestamp = comment["created"]
 
-        if author_email == username:
+        author_email = author.get("emailAddress")
+
+        if author_email is not None and author_email == username:
             if latest_timestamp is None or created_timestamp > latest_timestamp:
                 latest_comment = comment
                 latest_timestamp = created_timestamp
@@ -204,7 +206,7 @@ def format_date(date):
 async def get_jira_tickets(account_ids, web_client):
     """Make a GET request to the API with Basic Authentication."""
 
-    days_to_look_back = 2
+    days_to_look_back = 1
 
     if account_ids is not None and account_ids.strip() != "":
         account_id_list = [account_id.strip() for account_id in account_ids.split(",")]
