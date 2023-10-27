@@ -24,9 +24,10 @@ async def async_setup(hass, config):
         """Handle the service call."""
         call.data.get(ATTR_NAME, DEFAULT_NAME)
 
-        username = config[DOMAIN].get("username")
-        api_token = config[DOMAIN].get("api_token")
-        base_url = config[DOMAIN].get("jira_base_url")
+        entry = hass.config_entries.async_entries(DOMAIN)[0]
+        username = entry.data.get(CONF_USERNAME)
+        api_token = entry.data.get(CONF_API_KEY)
+        base_url = entry.data.get(CONF_HOST)
         account_ids = config[DOMAIN].get("jira_account_ids")
         comment_length = config[DOMAIN].get("comment_length", 80)
 
